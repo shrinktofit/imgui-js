@@ -63,6 +63,7 @@ BIND_FLAGS += -s SINGLE_FILE=1
 # BIND_FLAGS += -s TOTAL_MEMORY=4194304
 # BIND_FLAGS += -s ALLOW_MEMORY_GROWTH=1
 BIND_FLAGS += -s EMBIND_STD_STRING_IS_UTF8=1
+BIND_FLAGS += -s EXPORT_ES6=1
 
 build-bind-imgui: build/emscripten.d.ts build/bind-imgui.d.ts build/bind-imgui.js
 

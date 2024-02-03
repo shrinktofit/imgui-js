@@ -1,15 +1,13 @@
 {
   "compilerOptions": {
     "target": "ES2016",
-    "module": "system",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
     "strict": true,
     "outDir": "build",
     "sourceMap": true,
     "declaration": true,
     "baseUrl": ".",
-    "paths": {
-      "bind-imgui": [ "build/bind-imgui" ],
-    }
   },
   "files": [
     "src/imgui.ts",

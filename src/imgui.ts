@@ -5,7 +5,7 @@ export interface XYZW extends XYZ { w: number; }
 export interface RGB { r: number; g: number; b: number; }
 export interface RGBA extends RGB { a: number; }
 
-import * as Bind from "bind-imgui";
+import * as Bind from "./bind-imgui.js";
 export { Bind };
 
 let bind: Bind.Module;
@@ -808,8 +808,8 @@ export enum ImDrawListFlags
 export { ImU32 as U32 }
 export type ImU32 = Bind.ImU32;
 
-export { interface_ImVec2 } from "bind-imgui";
-export { reference_ImVec2 } from "bind-imgui";
+export { interface_ImVec2 } from "./bind-imgui.js";
+export { reference_ImVec2 } from "./bind-imgui.js";
 
 export { ImVec2 as Vec2 }
 export class ImVec2 implements Bind.interface_ImVec2 {
@@ -839,8 +839,8 @@ export class ImVec2 implements Bind.interface_ImVec2 {
     }
 }
 
-export { interface_ImVec4 } from "bind-imgui";
-export { reference_ImVec4 } from "bind-imgui";
+export { interface_ImVec4 } from "./bind-imgui.js";
+export { reference_ImVec4 } from "./bind-imgui.js";
 
 export { ImVec4 as Vec4 }
 export class ImVec4 implements Bind.interface_ImVec4 {
@@ -1507,7 +1507,7 @@ export class ImDrawVert
     // ImU32   col;
     public col: Uint32Array;
 
-    constructor(buffer: ArrayBuffer, byteOffset: number = 0) {
+    constructor(buffer: ArrayBufferLike, byteOffset: number = 0) {
         this.pos = new Float32Array(buffer, byteOffset + bind.ImDrawVertPosOffset, 2);
         this.uv = new Float32Array(buffer, byteOffset + bind.ImDrawVertUVOffset, 2);
         this.col = new Uint32Array(buffer, byteOffset + bind.ImDrawVertColOffset, 1);
@@ -1996,7 +1996,7 @@ export class ImFontAtlas
     }
     // IMGUI_API ImFont*           AddFontFromFileTTF(const char* filename, float size_pixels, const ImFontConfig* font_cfg = NULL, const ImWchar* glyph_ranges = NULL);
     // IMGUI_API ImFont*           AddFontFromMemoryTTF(void* font_data, int font_size, float size_pixels, const ImFontConfig* font_cfg = NULL, const ImWchar* glyph_ranges = NULL); // Note: Transfer ownership of 'ttf_data' to ImFontAtlas! Will be deleted after Build(). Set font_cfg->FontDataOwnedByAtlas to false to keep ownership.
-    public AddFontFromMemoryTTF(data: ArrayBuffer, size_pixels: number, font_cfg: ImFontConfig | null = null, glyph_ranges: number | null = null): ImFont {
+    public AddFontFromMemoryTTF(data: ArrayBufferLike, size_pixels: number, font_cfg: ImFontConfig | null = null, glyph_ranges: number | null = null): ImFont {
         return new ImFont(this.native.AddFontFromMemoryTTF(new Uint8Array(data), size_pixels, font_cfg && font_cfg.internal, glyph_ranges));
     }
     // IMGUI_API ImFont*           AddFontFromMemoryCompressedTTF(const void* compressed_font_data, int compressed_font_size, float size_pixels, const ImFontConfig* font_cfg = NULL, const ImWchar* glyph_ranges = NULL); // 'compressed_font_data' still owned by caller. Compress with binary_to_compressed_c.cpp.
