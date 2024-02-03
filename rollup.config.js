@@ -17,7 +17,7 @@ export default [
     output: {
       file: "dist/imgui.umd.js",
       name: "ImGui",
-      format: "umd",
+      format: "esm",
       exports: "named",
     },
     plugins: [

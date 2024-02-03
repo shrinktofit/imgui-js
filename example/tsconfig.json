@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2016",
-    "module": "system",
+    "module": "ES2015",
     "strict": true,
     "sourceMap": true,
     "declaration": true,
