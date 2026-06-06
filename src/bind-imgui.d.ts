@@ -1105,6 +1105,7 @@ export interface Module extends Emscripten.EmscriptenModule {
     DestroyContext(ctx: WrapImGuiContext | null): void;
     GetCurrentContext(): WrapImGuiContext | null;
     SetCurrentContext(ctx: WrapImGuiContext | null): void;
+    HitTestInputRegion(x: number, y: number): boolean;
 
     // Main
     // IMGUI_API ImGuiIO&      GetIO();                                    // access the IO structure (mouse/keyboard/gamepad inputs, time, various configuration options/flags)

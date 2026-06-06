@@ -2823,6 +2823,7 @@ export function SetCurrentContext(ctx: ImGuiContext | null): void {
     bind.SetCurrentContext((ctx === null) ? null : ctx.native);
     ImGuiContext.current_ctx = ctx;
 }
+export function HitTestInputRegion(x: number, y: number): boolean { return bind.HitTestInputRegion(x, y); }
 
 // Main
 // IMGUI_API ImGuiIO&      GetIO();                                    // access the IO structure (mouse/keyboard/gamepad inputs, time, various configuration options/flags)

@@ -1,4 +1,5 @@
 #include "imgui.h"
+#include "imgui_internal.h"
 
 #ifndef __FLT_MAX__
 #define __FLT_MAX__ 3.40282346638528859812e+38F
@@ -12,6 +13,19 @@ void ImGui::ShowFontSelector(const char*) {}
 #endif
 
 #include <emscripten/bind.h>
+#include <type_traits>
+
+template <typename T>
+emscripten::val raw_pointer_to_val(T* pointer) {
+    if (pointer == NULL) {
+        return emscripten::val::null();
+    }
+
+    using namespace emscripten::internal;
+    WireTypePack<T*> argv(static_cast<T*>(pointer));
+    return emscripten::val::take_ownership(
+        _emval_take_value(TypeID<AllowedRawPointer<T>>::get(), argv));
+}
 
 #define FUNCTION(RET, ARGS, CODE...) \
     emscripten::optional_override([] ARGS -> RET { CODE })
@@ -32,19 +46,22 @@ void ImGui::ShowFontSelector(const char*) {}
 
 #define CLASS_MEMBER_GET_RAW_POINTER(CLASS, MEMBER) \
     .property(#MEMBER, FUNCTION(emscripten::val, (const CLASS& that), { \
-        auto p = that.MEMBER; return p == NULL ? emscripten::val::null() : emscripten::val(p); \
+        using MemberType = typename std::remove_const<typename std::remove_pointer<decltype(that.MEMBER)>::type>::type; \
+        auto p = const_cast<MemberType*>(that.MEMBER); return raw_pointer_to_val(p); \
     }))
 
 #define CLASS_MEMBER_GET_SET_RAW_POINTER(CLASS, MEMBER) \
     .property(#MEMBER, FUNCTION(emscripten::val, (const CLASS& that), { \
-        auto p = that.MEMBER; return p == NULL ? emscripten::val::null() : emscripten::val(p); \
+        using MemberType = typename std::remove_const<typename std::remove_pointer<decltype(that.MEMBER)>::type>::type; \
+        auto p = const_cast<MemberType*>(that.MEMBER); return raw_pointer_to_val(p); \
     }), FUNCTION(void, (CLASS& that, emscripten::val value), { \
         that.MEMBER = value.isNull() ? NULL : value.as<decltype(that.MEMBER)>(emscripten::allow_raw_pointers()); \
     }))
 
 #define CLASS_MEMBER_GET_RAW_REFERENCE(CLASS, MEMBER) \
     .property(#MEMBER, FUNCTION(emscripten::val, (const CLASS& that), { \
-        auto p = &that.MEMBER; return emscripten::val(p); \
+        using MemberType = typename std::remove_const<typename std::remove_reference<decltype(that.MEMBER)>::type>::type; \
+        auto p = const_cast<MemberType*>(&that.MEMBER); return raw_pointer_to_val(p); \
     }))
 
 #define CLASS_METHOD(CLASS, METHOD) \
@@ -76,6 +93,73 @@ emscripten::val get_mallinfo() {
 
 EMSCRIPTEN_BINDINGS(mallinfo) {
     emscripten::function("mallinfo", &get_mallinfo);
+}
+
+static ImGuiWindow* HitTestInputWindow(const ImVec2& point) {
+    ImGuiContext& g = *GImGui;
+
+    if (g.MovingWindow && !(g.MovingWindow->Flags & ImGuiWindowFlags_NoMouseInputs)) {
+        return g.MovingWindow;
+    }
+
+    const ImVec2 padding_regular = g.Style.TouchExtraPadding;
+    const ImVec2 padding_for_resize = g.IO.ConfigWindowsResizeFromEdges
+        ? ImMax(g.Style.TouchExtraPadding, ImVec2(4.0f, 4.0f))
+        : padding_regular;
+    for (int i = g.Windows.Size - 1; i >= 0; i--) {
+        ImGuiWindow* window = g.Windows[i];
+        if (!window->Active || window->Hidden) {
+            continue;
+        }
+        if (window->Flags & ImGuiWindowFlags_NoMouseInputs) {
+            continue;
+        }
+
+        ImRect bounds(window->OuterRectClipped);
+        if (window->Flags & (ImGuiWindowFlags_ChildWindow | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize)) {
+            bounds.Expand(padding_regular);
+        } else {
+            bounds.Expand(padding_for_resize);
+        }
+        if (!bounds.Contains(point)) {
+            continue;
+        }
+
+        if (window->HitTestHoleSize.x != 0) {
+            ImVec2 hole_pos(window->Pos.x + (float)window->HitTestHoleOffset.x, window->Pos.y + (float)window->HitTestHoleOffset.y);
+            ImVec2 hole_size((float)window->HitTestHoleSize.x, (float)window->HitTestHoleSize.y);
+            if (ImRect(hole_pos, ImVec2(hole_pos.x + hole_size.x, hole_pos.y + hole_size.y)).Contains(point)) {
+                continue;
+            }
+        }
+
+        return window;
+    }
+
+    return NULL;
+}
+
+// Side-effect-free input routing hit-test for touch start. Keep this separate
+// from UpdateHoveredWindowAndCaptureFlags(), which mutates hovered/capture state.
+static bool HitTestInputRegion(float x, float y) {
+    if (GImGui == NULL) {
+        return false;
+    }
+
+    ImGuiContext& g = *GImGui;
+    if (g.ActiveId != 0 || g.MovingWindow != NULL || g.DragDropActive) {
+        return true;
+    }
+
+    if (ImGui::GetTopMostPopupModal() != NULL) {
+        return true;
+    }
+
+    if (g.OpenPopupStack.Size > 0) {
+        return true;
+    }
+
+    return HitTestInputWindow(ImVec2(x, y)) != NULL;
 }
 
 #define TODO() printf("TODO: %s\n", __PRETTY_FUNCTION__)
@@ -536,9 +620,9 @@ EMSCRIPTEN_BINDINGS(ImGuiTableSortSpecs) {
     emscripten::class_<ImGuiTableSortSpecs>("ImGuiTableSortSpecs")
         // const ImGuiTableColumnSortSpecs* Specs;     // Pointer to sort spec array.
         // CLASS_MEMBER_GET_RAW_POINTER(ImGuiTableSortSpecs, Specs)
-      .function("GetSpec", FUNCTION(emscripten::val, (ImGuiTableSortSpecs& that, const int idx), {
+        .function("GetSpec", FUNCTION(emscripten::val, (ImGuiTableSortSpecs& that, const int idx), {
             const ImGuiTableColumnSortSpecs* spec = &that.Specs[idx];
-            return emscripten::val(spec);
+            return raw_pointer_to_val(const_cast<ImGuiTableColumnSortSpecs*>(spec));
         }), emscripten::allow_raw_pointers())
         // int                         SpecsCount;     // Sort spec count. Most often 1. May be > 1 when ImGuiTableFlags_SortMulti is enabled. May be == 0 when ImGuiTableFlags_SortTristate is enabled.
         CLASS_MEMBER(ImGuiTableSortSpecs, SpecsCount)
@@ -564,7 +648,7 @@ EMSCRIPTEN_BINDINGS(ImDrawList) {
         .function("IterateDrawCmds", FUNCTION(void, (const ImDrawList* that, emscripten::val callback), {
             unsigned int ElemStart = 0;
             for (const ImDrawCmd* pcmd = that->CmdBuffer.begin(); pcmd != that->CmdBuffer.end(); pcmd++) {
-                callback(emscripten::val(pcmd), emscripten::val(ElemStart));
+                callback(raw_pointer_to_val(const_cast<ImDrawCmd*>(pcmd)), emscripten::val(ElemStart));
                 ElemStart += pcmd->ElemCount;
             }
         }), emscripten::allow_raw_pointers())
@@ -812,7 +896,7 @@ EMSCRIPTEN_BINDINGS(ImDrawData) {
         .function("IterateDrawLists", FUNCTION(void, (const ImDrawData* that, emscripten::val callback), {
             for (int n = 0; n < that->CmdListsCount; n++) {
                 const ImDrawList* cmd_list = that->CmdLists[n];
-                callback(emscripten::val(cmd_list));
+                callback(raw_pointer_to_val(const_cast<ImDrawList*>(cmd_list)));
             }
         }), emscripten::allow_raw_pointers())
 
@@ -933,7 +1017,7 @@ EMSCRIPTEN_BINDINGS(ImFont) {
         .function("IterateGlyphs", FUNCTION(void, (ImFont* that, emscripten::val callback), {
             for (int n = 0; n < that->Glyphs.Size; n++) {
                 auto glyph = &that->Glyphs[n];
-                callback(emscripten::val(glyph));
+                callback(raw_pointer_to_val(glyph));
             }
         }), emscripten::allow_raw_pointers())
         // ImVector<float>             IndexAdvanceX;      //              // Sparse. Glyphs->AdvanceX in a directly indexable way (more cache-friendly, for CalcTextSize functions which are often bottleneck in large UI).
@@ -960,7 +1044,7 @@ EMSCRIPTEN_BINDINGS(ImFont) {
         .function("IterateConfigData", FUNCTION(void, (ImFont* that, emscripten::val callback), {
             for (int n = 0; n < that->ConfigDataCount; n++) {
                 auto cfg = &that->ConfigData[n];
-                callback(emscripten::val(cfg));
+                callback(raw_pointer_to_val(const_cast<ImFontConfig*>(cfg)));
             }
         }), emscripten::allow_raw_pointers())
         // ImFontAtlas*                ContainerAtlas;     //              // What we has been loaded into
@@ -981,12 +1065,12 @@ EMSCRIPTEN_BINDINGS(ImFont) {
         // IMGUI_API const ImFontGlyph*FindGlyph(ImWchar c) const;
         .function("FindGlyph", FUNCTION(emscripten::val, (const ImFont& that, ImWchar c), {
             const ImFontGlyph* glyph = that.FindGlyph(c);
-            return glyph == NULL ? emscripten::val::null() : emscripten::val(glyph);
+            return raw_pointer_to_val(const_cast<ImFontGlyph*>(glyph));
         }), emscripten::allow_raw_pointers())
         // IMGUI_API const ImFontGlyph*FindGlyphNoFallback(ImWchar c) const;
         .function("FindGlyphNoFallback", FUNCTION(emscripten::val, (const ImFont& that, ImWchar c), {
             const ImFontGlyph* glyph = that.FindGlyphNoFallback(c);
-            return glyph == NULL ? emscripten::val::null() : emscripten::val(glyph);
+            return raw_pointer_to_val(const_cast<ImFontGlyph*>(glyph));
         }), emscripten::allow_raw_pointers())
         // IMGUI_API void              SetFallbackChar(ImWchar c);
         // CLASS_METHOD(ImFont, SetFallbackChar)
@@ -1093,7 +1177,7 @@ EMSCRIPTEN_BINDINGS(ImFontAtlas) {
         .function("AddFontDefault", FUNCTION(emscripten::val, (ImFontAtlas& that, emscripten::val font_cfg), {
             ImFontConfig _font_cfg = font_cfg.isNull() ? ImFontConfig() : import_ImFontConfig(font_cfg);
             ImFont* font = that.AddFontDefault(font_cfg.isNull() ? NULL : &_font_cfg);
-            return emscripten::val(font);
+            return raw_pointer_to_val(font);
         }), emscripten::allow_raw_pointers())
         // IMGUI_API ImFont*           AddFontFromFileTTF(const char* filename, float size_pixels, const ImFontConfig* font_cfg = NULL, const ImWchar* glyph_ranges = NULL);
         // IMGUI_API ImFont*           AddFontFromMemoryTTF(void* font_data, int font_size, float size_pixels, const ImFontConfig* font_cfg = NULL, const ImWchar* glyph_ranges = NULL); // Note: Transfer ownership of 'ttf_data' to ImFontAtlas! Will be deleted after Build(). Set font_cfg->FontDataOwnedByAtlas to false to keep ownership.
@@ -1107,7 +1191,7 @@ EMSCRIPTEN_BINDINGS(ImFontAtlas) {
             ImFontConfig _font_cfg = font_cfg.isNull() ? ImFontConfig() : import_ImFontConfig(font_cfg);
             ImWchar* _glyph_ranges = glyph_ranges.isNull() ? NULL : (ImWchar*) glyph_ranges.as<intptr_t>();
             ImFont* font = that.AddFontFromMemoryTTF(_data_copy, _data_size, size_pixels, font_cfg.isNull() ? NULL : &_font_cfg, _glyph_ranges);
-            return emscripten::val(font);
+            return raw_pointer_to_val(font);
         }), emscripten::allow_raw_pointers())
         // IMGUI_API ImFont*           AddFontFromMemoryCompressedTTF(const void* compressed_font_data, int compressed_font_size, float size_pixels, const ImFontConfig* font_cfg = NULL, const ImWchar* glyph_ranges = NULL); // 'compressed_font_data' still owned by caller. Compress with binary_to_compressed_c.cpp.
         // IMGUI_API ImFont*           AddFontFromMemoryCompressedBase85TTF(const char* compressed_font_data_base85, float size_pixels, const ImFontConfig* font_cfg = NULL, const ImWchar* glyph_ranges = NULL);              // 'compressed_font_data_base85' still owned by caller. Compress with binary_to_compressed_c.cpp with -base85 parameter.
@@ -1267,7 +1351,7 @@ EMSCRIPTEN_BINDINGS(ImFontAtlas) {
         .function("IterateFonts", FUNCTION(void, (ImFontAtlas* that, emscripten::val callback), {
             for (int n = 0; n < that->Fonts.Size; n++) {
                 ImFont* font = that->Fonts.Data[n];
-                callback(emscripten::val(font));
+                callback(raw_pointer_to_val(font));
             }
         }), emscripten::allow_raw_pointers())
         // ImVector<CustomRect>        CustomRects;        // Rectangles for packing custom texture data into the atlas.
@@ -1530,7 +1614,7 @@ EMSCRIPTEN_BINDINGS(ImGuiIO) {
         // ImVec2      MouseClickedPos[5];         // Position at time of clicking
         .function("_getAt_MouseClickedPos", FUNCTION(emscripten::val, (const ImGuiIO* that, int index), {
             if (0 <= index && index < IM_ARRAYSIZE(that->MouseClickedPos)) {
-                const auto p = &that->MouseClickedPos[index]; return emscripten::val(p);
+                const auto p = &that->MouseClickedPos[index]; return raw_pointer_to_val(const_cast<ImVec2*>(p));
             }
             return emscripten::val::undefined();
         }), emscripten::allow_raw_pointers())
@@ -1646,7 +1730,7 @@ EMSCRIPTEN_BINDINGS(ImGuiStyle) {
         CLASS_MEMBER(ImGuiStyle, CircleTessellationMaxError)
         .function("_getAt_Colors", FUNCTION(emscripten::val, (ImGuiStyle* that, ImGuiCol index), {
             if (0 <= index && index < ImGuiCol_COUNT) {
-                auto p = &that->Colors[index]; return emscripten::val(p);
+                auto p = &that->Colors[index]; return raw_pointer_to_val(p);
             }
             return emscripten::val::undefined();
         }), emscripten::allow_raw_pointers())
@@ -1717,6 +1801,7 @@ EMSCRIPTEN_BINDINGS(ImGui) {
     emscripten::function("DestroyContext", FUNCTION(void, (WrapImGuiContext* wrap), { WrapImGuiContext::DestroyContext(wrap); }), emscripten::allow_raw_pointers());
     emscripten::function("GetCurrentContext", FUNCTION(WrapImGuiContext*, (), { return WrapImGuiContext::GetCurrentContext(); }), emscripten::allow_raw_pointers());
     emscripten::function("SetCurrentContext", FUNCTION(void, (WrapImGuiContext* wrap), { WrapImGuiContext::SetCurrentContext(wrap); }), emscripten::allow_raw_pointers());
+    emscripten::function("HitTestInputRegion", &HitTestInputRegion);
 
     // Main
     // IMGUI_API ImGuiIO&      GetIO();                                    // access the IO structure (mouse/keyboard/gamepad inputs, time, various configuration options/flags)
@@ -1725,12 +1810,12 @@ EMSCRIPTEN_BINDINGS(ImGui) {
     // IMGUI_API void          EndFrame();                                 // ends the Dear ImGui frame. automatically called by Render(). If you don't need to render data (skipping rendering) you may call EndFrame() without Render()... but you'll have wasted CPU already! If you don't need to render, better to not create any windows and not call NewFrame() at all!
     // IMGUI_API void          Render();                                   // ends the Dear ImGui frame, finalize the draw data. You can then get call GetDrawData().
     // IMGUI_API ImDrawData*   GetDrawData();                              // valid after Render() and until the next call to NewFrame(). this is what you have to render.
-    emscripten::function("GetIO", FUNCTION(emscripten::val, (), { ImGuiIO* p = &ImGui::GetIO(); return emscripten::val(p); }), emscripten::allow_raw_pointers());
-    emscripten::function("GetStyle", FUNCTION(emscripten::val, (), { ImGuiStyle* p = &ImGui::GetStyle(); return emscripten::val(p); }), emscripten::allow_raw_pointers());
+    emscripten::function("GetIO", FUNCTION(emscripten::val, (), { ImGuiIO* p = &ImGui::GetIO(); return raw_pointer_to_val(p); }), emscripten::allow_raw_pointers());
+    emscripten::function("GetStyle", FUNCTION(emscripten::val, (), { ImGuiStyle* p = &ImGui::GetStyle(); return raw_pointer_to_val(p); }), emscripten::allow_raw_pointers());
     emscripten::function("NewFrame", &ImGui::NewFrame);
     emscripten::function("EndFrame", &ImGui::EndFrame);
     emscripten::function("Render", &ImGui::Render);
-    emscripten::function("GetDrawData", FUNCTION(emscripten::val, (), { ImDrawData* p = ImGui::GetDrawData(); return emscripten::val(p); }), emscripten::allow_raw_pointers());
+    emscripten::function("GetDrawData", FUNCTION(emscripten::val, (), { ImDrawData* p = ImGui::GetDrawData(); return raw_pointer_to_val(p); }), emscripten::allow_raw_pointers());
 
     // Demo, Debug, Information
     // IMGUI_API void          ShowDemoWindow(bool* p_open = NULL);        // create Demo window. demonstrate most ImGui features. call this to learn about the library! try to make it always available in your application!
@@ -1812,7 +1897,7 @@ EMSCRIPTEN_BINDINGS(ImGui) {
     emscripten::function("IsWindowCollapsed", &ImGui::IsWindowCollapsed);
     emscripten::function("IsWindowFocused", &ImGui::IsWindowFocused);
     emscripten::function("IsWindowHovered", &ImGui::IsWindowHovered);
-    emscripten::function("GetWindowDrawList", FUNCTION(emscripten::val, (), { ImDrawList* p = ImGui::GetWindowDrawList(); return emscripten::val(p); }), emscripten::allow_raw_pointers());
+    emscripten::function("GetWindowDrawList", FUNCTION(emscripten::val, (), { ImDrawList* p = ImGui::GetWindowDrawList(); return raw_pointer_to_val(p); }), emscripten::allow_raw_pointers());
     emscripten::function("GetWindowPos", FUNCTION(emscripten::val, (emscripten::val out), { return export_ImVec2(ImGui::GetWindowPos(), out); }));
     emscripten::function("GetWindowSize", FUNCTION(emscripten::val, (emscripten::val out), { return export_ImVec2(ImGui::GetWindowSize(), out); }));
     emscripten::function("GetWindowWidth", &ImGui::GetWindowWidth);
@@ -1841,7 +1926,7 @@ EMSCRIPTEN_BINDINGS(ImGui) {
         if (!custom_callback.isNull()) {
             WrapImGuiContext::GetCurrentContext()->_ImGui_SetNextWindowSizeConstraints_custom_callback = custom_callback;
             ImGui::SetNextWindowSizeConstraints(import_ImVec2(size_min), import_ImVec2(size_max), FUNCTION(void, (ImGuiSizeCallbackData* data), {
-                WrapImGuiContext::GetCurrentContext()->_ImGui_SetNextWindowSizeConstraints_custom_callback(emscripten::val(data));
+                WrapImGuiContext::GetCurrentContext()->_ImGui_SetNextWindowSizeConstraints_custom_callback(raw_pointer_to_val(data));
             }), NULL);
         } else {
             ImGui::SetNextWindowSizeConstraints(import_ImVec2(size_min), import_ImVec2(size_max));
@@ -1888,14 +1973,14 @@ EMSCRIPTEN_BINDINGS(ImGui) {
     // IMGUI_API void          SetScrollFromPosY(float local_y, float center_y_ratio = 0.5f);  // adjust scrolling amount to make given position visible. Generally GetCursorStartPos() + offset to compute a valid position.
     emscripten::function("GetScrollX", &ImGui::GetScrollX);
     emscripten::function("GetScrollY", &ImGui::GetScrollY);
-    emscripten::function("SetScrollX", &ImGui::SetScrollX);
-    emscripten::function("SetScrollY", &ImGui::SetScrollY);
+    emscripten::function("SetScrollX", FUNCTION(void, (float scroll_x), { ImGui::SetScrollX(scroll_x); }));
+    emscripten::function("SetScrollY", FUNCTION(void, (float scroll_y), { ImGui::SetScrollY(scroll_y); }));
     emscripten::function("GetScrollMaxX", &ImGui::GetScrollMaxX);
     emscripten::function("GetScrollMaxY", &ImGui::GetScrollMaxY);
     emscripten::function("SetScrollHereX", &ImGui::SetScrollHereX);
     emscripten::function("SetScrollHereY", &ImGui::SetScrollHereY);
-    emscripten::function("SetScrollFromPosX", &ImGui::SetScrollFromPosX);
-    emscripten::function("SetScrollFromPosY", &ImGui::SetScrollFromPosY);
+    emscripten::function("SetScrollFromPosX", FUNCTION(void, (float local_x, float center_x_ratio), { ImGui::SetScrollFromPosX(local_x, center_x_ratio); }));
+    emscripten::function("SetScrollFromPosY", FUNCTION(void, (float local_y, float center_y_ratio), { ImGui::SetScrollFromPosY(local_y, center_y_ratio); }));
 
     // Parameters stacks (shared)
     // IMGUI_API void          PushFont(ImFont* font);                                         // use NULL as a shortcut to push default font
@@ -1955,13 +2040,13 @@ EMSCRIPTEN_BINDINGS(ImGui) {
     // IMGUI_API ImU32         GetColorU32(const ImVec4& col);                                 // retrieve given color with style alpha applied, packed as a 32-bit value suitable for ImDrawList
     // IMGUI_API ImU32         GetColorU32(ImU32 col);                                         // retrieve given color with style alpha applied, packed as a 32-bit value suitable for ImDrawList
     // IMGUI_API const ImVec4& GetStyleColorVec4(ImGuiCol idx);                                // retrieve style color as stored in ImGuiStyle structure. use to feed back into PushStyleColor(), otherwise use GetColorU32() to get style color with style alpha baked in.
-    emscripten::function("GetFont", FUNCTION(emscripten::val, (), { ImFont* p = ImGui::GetFont(); return emscripten::val(p); }), emscripten::allow_raw_pointers());
+    emscripten::function("GetFont", FUNCTION(emscripten::val, (), { ImFont* p = ImGui::GetFont(); return raw_pointer_to_val(p); }), emscripten::allow_raw_pointers());
     emscripten::function("GetFontSize", &ImGui::GetFontSize);
     emscripten::function("GetFontTexUvWhitePixel", FUNCTION(emscripten::val, (emscripten::val out), { return export_ImVec2(ImGui::GetFontTexUvWhitePixel(), out); }));
     emscripten::function("GetColorU32_A", FUNCTION(ImU32, (ImGuiCol idx, emscripten::val alpha_mul), { return ImGui::GetColorU32(idx, import_value<float>(alpha_mul)); }));
     emscripten::function("GetColorU32_B", FUNCTION(ImU32, (emscripten::val col), { return ImGui::GetColorU32(import_ImVec4(col)); }));
     emscripten::function("GetColorU32_C", FUNCTION(ImU32, (ImU32 col), { return ImGui::GetColorU32(col); }));
-    emscripten::function("GetStyleColorVec4", FUNCTION(emscripten::val, (ImGuiCol idx), { const ImVec4* p = &ImGui::GetStyleColorVec4(idx); return emscripten::val(p); }));
+    emscripten::function("GetStyleColorVec4", FUNCTION(emscripten::val, (ImGuiCol idx), { const ImVec4* p = &ImGui::GetStyleColorVec4(idx); return raw_pointer_to_val(const_cast<ImVec4*>(p)); }));
 
     // Cursor / Layout
     // - By "cursor" we mean the current output position.
@@ -2343,7 +2428,7 @@ EMSCRIPTEN_BINDINGS(ImGui) {
         if (!callback.isNull()) {
             WrapImGuiContext::GetCurrentContext()->_ImGui_InputText_callback = callback;
             ret = ImGui::InputText(label.c_str(), (char*) _buf.data(), buf_size, flags, FUNCTION(int, (ImGuiInputTextCallbackData* data), {
-                return WrapImGuiContext::GetCurrentContext()->_ImGui_InputText_callback(emscripten::val(data)).as<int>();
+                return WrapImGuiContext::GetCurrentContext()->_ImGui_InputText_callback(raw_pointer_to_val(data)).as<int>();
             }), NULL);
         } else {
             ret = ImGui::InputText(label.c_str(), (char*) _buf.data(), buf_size, flags);
@@ -2359,7 +2444,7 @@ EMSCRIPTEN_BINDINGS(ImGui) {
         if (!callback.isNull()) {
             WrapImGuiContext::GetCurrentContext()->_ImGui_InputTextMultiline_callback = callback;
             ret = ImGui::InputTextMultiline(label.c_str(), (char*) _buf.data(), buf_size, import_ImVec2(size), flags, FUNCTION(int, (ImGuiInputTextCallbackData* data), {
-                return WrapImGuiContext::GetCurrentContext()->_ImGui_InputTextMultiline_callback(emscripten::val(data)).as<int>();
+                return WrapImGuiContext::GetCurrentContext()->_ImGui_InputTextMultiline_callback(raw_pointer_to_val(data)).as<int>();
             }), NULL);
         } else {
             ret = ImGui::InputTextMultiline(label.c_str(), (char*) _buf.data(), buf_size, import_ImVec2(size), flags);
@@ -2375,7 +2460,7 @@ EMSCRIPTEN_BINDINGS(ImGui) {
         if (!callback.isNull()) {
             WrapImGuiContext::GetCurrentContext()->_ImGui_InputText_callback = callback;
             ret = ImGui::InputTextWithHint(label.c_str(), hint.c_str(), (char*) _buf.data(), buf_size, flags, FUNCTION(int, (ImGuiInputTextCallbackData* data), {
-                return WrapImGuiContext::GetCurrentContext()->_ImGui_InputText_callback(emscripten::val(data)).as<int>();
+                return WrapImGuiContext::GetCurrentContext()->_ImGui_InputText_callback(raw_pointer_to_val(data)).as<int>();
             }), NULL);
         } else {
             ret = ImGui::InputTextWithHint(label.c_str(), hint.c_str(), (char*) _buf.data(), buf_size, flags);
@@ -2715,7 +2800,7 @@ EMSCRIPTEN_BINDINGS(ImGui) {
     //   wastefully sort your data every frame!
     // - Lifetime: don't hold on this pointer over multiple frames or past any subsequent call to BeginTable().
     // IMGUI_API ImGuiTableSortSpecs* TableGetSortSpecs();                        // get latest sort specs for the table (NULL if not sorting).
-    emscripten::function("TableGetSortSpecs", FUNCTION(emscripten::val, (), { ImGuiTableSortSpecs* p = ImGui::TableGetSortSpecs(); return emscripten::val(p); }), emscripten::allow_raw_pointers());
+    emscripten::function("TableGetSortSpecs", FUNCTION(emscripten::val, (), { ImGuiTableSortSpecs* p = ImGui::TableGetSortSpecs(); return raw_pointer_to_val(p); }), emscripten::allow_raw_pointers());
     // Tables: Miscellaneous functions
     // - Functions args 'int column_n' treat the default value of -1 as the same as passing the current column index.
     // IMGUI_API int                   TableGetColumnCount();                      // return number of columns (value passed to BeginTable)
@@ -2866,7 +2951,7 @@ EMSCRIPTEN_BINDINGS(ImGui) {
     // - In 'docking' branch with multi-viewport enabled, we extend this concept to have multiple active viewports.
     // - In the future we will extend this concept further to also represent Platform Monitor and support a "no main platform window" operation mode.
     // IMGUI_API ImGuiViewport* GetMainViewport();                                                 // return primary/default viewport. This can never be NULL.
-    emscripten::function("GetMainViewport", FUNCTION(emscripten::val, (), { ImGuiViewport* p = ImGui::GetMainViewport(); return emscripten::val(p); }), emscripten::allow_raw_pointers());
+    emscripten::function("GetMainViewport", FUNCTION(emscripten::val, (), { ImGuiViewport* p = ImGui::GetMainViewport(); return raw_pointer_to_val(p); }), emscripten::allow_raw_pointers());
 
     // Miscellaneous Utilities
     // IMGUI_API bool          IsRectVisible(const ImVec2& size);                                  // test if rectangle (of given size, starting from cursor position) is visible / not clipped.
@@ -2886,9 +2971,9 @@ EMSCRIPTEN_BINDINGS(ImGui) {
     emscripten::function("IsRectVisible_B", FUNCTION(bool, (emscripten::val rect_min, emscripten::val rect_max), { return ImGui::IsRectVisible(import_ImVec2(rect_min), import_ImVec2(rect_max)); }));
     emscripten::function("GetTime", &ImGui::GetTime);
     emscripten::function("GetFrameCount", &ImGui::GetFrameCount);
-    emscripten::function("GetBackgroundDrawList", FUNCTION(emscripten::val, (), { ImDrawList* p = ImGui::GetBackgroundDrawList(); return emscripten::val(p); }), emscripten::allow_raw_pointers());
-    emscripten::function("GetForegroundDrawList", FUNCTION(emscripten::val, (), { ImDrawList* p = ImGui::GetForegroundDrawList(); return emscripten::val(p); }), emscripten::allow_raw_pointers());
-    emscripten::function("GetDrawListSharedData", FUNCTION(emscripten::val, (), { ImDrawListSharedData* p = ImGui::GetDrawListSharedData(); return emscripten::val(p); }), emscripten::allow_raw_pointers());
+    emscripten::function("GetBackgroundDrawList", FUNCTION(emscripten::val, (), { ImDrawList* p = ImGui::GetBackgroundDrawList(); return raw_pointer_to_val(p); }), emscripten::allow_raw_pointers());
+    emscripten::function("GetForegroundDrawList", FUNCTION(emscripten::val, (), { ImDrawList* p = ImGui::GetForegroundDrawList(); return raw_pointer_to_val(p); }), emscripten::allow_raw_pointers());
+    emscripten::function("GetDrawListSharedData", FUNCTION(emscripten::val, (), { ImDrawListSharedData* p = ImGui::GetDrawListSharedData(); return raw_pointer_to_val(p); }), emscripten::allow_raw_pointers());
     emscripten::function("GetStyleColorName", FUNCTION(std::string, (ImGuiCol idx), { return std::string(ImGui::GetStyleColorName(idx)); }));
     emscripten::function("SetStateStorage", FUNCTION(void, (emscripten::val tree), { TODO(); }));
     emscripten::function("GetStateStorage", FUNCTION(emscripten::val, (), { TODO(); return emscripten::val::null(); }));
@@ -3013,11 +3098,11 @@ EMSCRIPTEN_BINDINGS(ImGui) {
                 }), 
                 FUNCTION(void, (void* ptr, void* user_data), {
                     WrapImGuiContext* ctx = WrapImGuiContext::GetCurrentContext();
-                    ctx->_ImGui_SetAllocatorFunctions_free_func(emscripten::val(ptr), ctx->_ImGui_SetAllocatorFunctions_user_data);
+                    ctx->_ImGui_SetAllocatorFunctions_free_func(emscripten::val((intptr_t) ptr), ctx->_ImGui_SetAllocatorFunctions_user_data);
                 }), 
                 NULL);
         }
     }));
-    emscripten::function("MemAlloc", FUNCTION(emscripten::val, (size_t sz), { void* p = ImGui::MemAlloc(sz); return emscripten::val(p); }), emscripten::allow_raw_pointers());
+    emscripten::function("MemAlloc", FUNCTION(emscripten::val, (size_t sz), { void* p = ImGui::MemAlloc(sz); return emscripten::val((intptr_t) p); }), emscripten::allow_raw_pointers());
     emscripten::function("MemFree", FUNCTION(void, (emscripten::val ptr), { void* _ptr = ptr.as<void*>(emscripten::allow_raw_pointers()); ImGui::MemFree(_ptr); }));
 }
