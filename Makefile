@@ -55,7 +55,6 @@ BIND_FLAGS += -s EXPORT_BINDINGS=1
 # BIND_FLAGS += -s EXPORT_ALL=1
 # BIND_FLAGS += -s MEM_INIT_METHOD=0
 # BIND_FLAGS += --memory-init-file 0
-BIND_FLAGS += -s SINGLE_FILE=1
 # BIND_FLAGS += -s BINARYEN_ASYNC_COMPILATION=0
 # BIND_FLAGS += -s BINARYEN_METHOD=\"native-wasm,asmjs\"
 # BIND_FLAGS += -s BINARYEN_METHOD=\"interpret-asm2wasm,asmjs\"
